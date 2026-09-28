@@ -1,0 +1,8 @@
+datasets
+pandas
+pyarrow
+sentence-transformers
+qdrant-client
+torch
+llama-cpp-python
+huggingface_hub

@@ -1,0 +1,42 @@
+services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - ./qdrant_storage:/qdrant/storage
+    restart: unless-stopped
+
+  firewall:
+    build: .
+    container_name: firewall-app
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+    depends_on:
+      - qdrant
+    env_file:
+      - .env
+    environment:
+      - HF_TOKEN=${HF_TOKEN}
+      - QDRANT_URL=http://qdrant:6333
+      - FIREWALL_MODE=server
+      - FORCE_REBUILD=${FORCE_REBUILD:-false}
+      # --- Layer 2 LLM judge ---
+      - LAYER2_MODE=${LAYER2_MODE:-gray}
+      - LAYER2_MODEL_PATH=${LAYER2_MODEL_PATH:-/app/Qwen3.5-9B.Q4_K_M.gguf}
+      - LAYER2_GPU_LAYERS=${LAYER2_GPU_LAYERS:-0}
+    stdin_open: true
+    tty: true
+    # Uncomment the block below ONLY if this machine has an NVIDIA GPU +
+    # nvidia-container-toolkit installed. On CPU-only machines leave it commented.
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
