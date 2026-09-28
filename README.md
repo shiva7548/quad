@@ -1,102 +1,118 @@
-# quad
+# quad — RAG Prompt Firewall (Layer 1 + Layer 2)
 
-Code repository for the `quad` project. The trained model is **not** stored in
-this repo — it is hosted on the [Hugging Face Hub](https://huggingface.co) and
-downloaded on demand (see below for why).
+A two-layer AI **prompt firewall**: it detects malicious / adversarial prompts
+(prompt injection, jailbreaks, sandwich attacks) before they reach your LLM.
 
-## Why is the model not in this repo?
+| Layer | Name | Status | Tech |
+|---|---|---|---|
+| **Layer 1** | RAG & Semantic Vector Search | ✅ Complete | `SentenceTransformer("BAAI/bge-large-en-v1.5")` (1024-dim) + Qdrant with ~14,000+ malicious prompt vectors |
+| **Layer 2** | LLM Guardrail / Judge | ✅ Integrated | Local `Qwen3.5-9B.Q4_K_M.gguf` (~5.8 GB) via `llama-cpp-python` |
 
-| Place | Max file size | Verdict for a 5–8 GB model |
-|---|---|---|
-| GitHub (normal git) | **100 MB** per file | ❌ rejected at push |
-| GitHub LFS (Free/Pro) | 2 GB per file, ~1 GB free storage | ❌ too small, paid data packs needed |
-| GitHub Releases | 2 GB per asset | ❌ must split into many parts |
-| **Hugging Face Hub** | multi-GB files natively, free for public models | ✅ **use this** |
+**Layer 1** embeds the live prompt (split into clause chunks to defeat
+*Sandwich attacks*) and compares it against known-malicious vectors.
+**Layer 2** is a local LLM judge that classifies borderline or novel prompts
+that vector search alone is unsure about.
 
-So the plan is:
+* Web UI: `http://localhost:8000/`
+* REST API: `POST /check` with `{"prompt": "..."}`
+* Interactive CLI: `python firewall.py --cli`
 
-* **Model weights (5–8 GB)** → Hugging Face Hub (`your-hf-username/quad-model`)
-* **Code (this repo)** → GitHub, with a small script that fetches the weights
+## Why code on GitHub, model on Hugging Face?
 
-## Quick start
+GitHub rejects files over 100 MB — the 5.8 GB `.gguf` cannot live here.
+So this repo holds the **code**, and the model + vector DB live in the
+Hugging Face repo [`linto777/my-qdrant-project`](https://huggingface.co/linto777/my-qdrant-project)
+and are fetched on demand by `scripts/download_model.py`.
+
+## Quick start (local)
 
 ```bash
 # 1. Get the code
 git clone https://github.com/shiva7548/quad.git
 cd quad
 
-# 2. Install dependencies
+# 2. Install dependencies (do NOT copy a venv around)
 pip install -r requirements.txt
 
-# 3. Download the model weights (~5-8 GB, one time)
-python scripts/download_model.py --repo your-hf-username/quad-model
-#   -> saved into ./models/quad-model/  (git-ignored, never committed)
+# 3. Download the judge model + prebuilt vector DB (~6 GB, one time)
+python scripts/download_model.py
+#   -> Qwen3.5-9B.Q4_K_M.gguf  +  qdrant_storage/  +  datasets/
+
+# 4. Start Qdrant (easiest with Docker)
+docker run -d --name qdrant -p 6333:6333 -v ./qdrant_storage:/qdrant/storage qdrant/qdrant:latest
+#   (or reuse the downloaded qdrant_storage so the 14k vectors are already there)
+
+# 5. Run the firewall
+export QDRANT_URL=http://localhost:6333
+python firewall.py            # server + Web UI on http://localhost:8000/
+python firewall.py --cli      # interactive CLI instead
 ```
 
-For a **private** model repo, run `huggingface-cli login` first with a Hugging
-Face token that has *read* access.
+If `qdrant_storage/` is empty, the first run automatically rebuilds the index
+by downloading the malicious-prompt datasets and embedding ~14k prompts
+(needs `HF_TOKEN` in `.env` for gated datasets).
 
-## Upload the model (once, from your training machine)
-
-Follow `scripts/upload_model.sh`. Summary:
+## Run with Docker (local or server)
 
 ```bash
-pip install -U "huggingface_hub[cli]"
-huggingface-cli login          # needs a WRITE token from huggingface.co/settings/tokens
-hf upload your-hf-username/quad-model ./models/quad-model --repo-type model
+cp .env.example .env       # add your HF_TOKEN if you need dataset downloads
+docker compose up --build
+# Web UI on http://localhost:8000/
 ```
 
-Tip: save the model in shards under 5 GB each
-(`model.save_pretrained(dir, max_shard_size="4GB")`) — uploads are more reliable.
+## Layer 2 configuration
 
-## How people get access to the model (HTTP API vs git)
-
-Hugging Face can be accessed two ways — **use Method 1**:
-
-| Method | Command | Notes |
+| Env var | Default | Meaning |
 |---|---|---|
-| **1. HTTP API (recommended)** | `python scripts/download_model.py` or `hf download your-name/quad-model` | No git/git-lfs needed, resumable, faster (uses Xet/LFS over HTTPS). This is what `scripts/download_model.py` does. |
-| 2. Git + Git LFS | `git clone https://huggingface.co/your-name/quad-model` | Works like GitHub; requires `git lfs install` first. Fine if you want a git-style workflow. |
+| `LAYER2_MODE` | `gray` | `off` = Layer 1 only · `gray` = judge borderline scores only (fast) · `all` = judge every prompt Layer 1 doesn't block (strictest) |
+| `LAYER2_MIN_SCORE` | `0.55` | Lower bound of the "gray zone" in `gray` mode |
+| `LAYER2_MODEL_PATH` | `./Qwen3.5-9B.Q4_K_M.gguf` | Path to the GGUF judge model |
+| `LAYER2_GPU_LAYERS` | `0` | `0` = CPU only; set `-1` (or e.g. `33`) with an NVIDIA GPU |
+| `LAYER2_CONFIRM_BLOCKS` | `false` | `true` = Layer 2 re-verifies Layer 1 blocks (can rescue false positives) |
 
-### Public vs private model
+Example API response when Layer 2 judges a borderline prompt:
 
-* **Public model** — anyone can download it with no login, no token, no invites.
-  Simplest option; the repo code just calls the download script.
-* **Private model** — share it exactly like a GitHub repo:
-  1. Open the model page on huggingface.co → **Settings → Collaborators**
-  2. Add teammates with role **Read** (can download) or **Write** (can also upload
-     new versions). Organizations can use teams instead.
-  3. For an AI agent, server, or CI: create a **read** token at
-     [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens)
-     (scope it to only this model repo) and put it in the agent's settings or
-     the `HF_TOKEN` environment variable — never commit it to git.
+```json
+{
+  "status": "BLOCK",
+  "reason": "Malicious prompt confirmed (Layer 2 LLM Judge)",
+  "score": 0.61,
+  "layer2": {"verdict": "BLOCK", "reason": "attempt to reveal system prompt", "confidence": 0.92}
+}
+```
 
-### Who can upload (write access)
+If the GGUF file is missing, the firewall runs in **Layer 1 only** mode and
+prints a warning — nothing breaks.
 
-Uploading/updating the model needs a token with the **write** role, or
-collaborator **Write** permission — see `scripts/upload_model.sh`.
-Normal code developers only need **Read** so `download_model.py` works.
+## Run online (deploy)
+
+Any of these work — the app is a plain Python HTTP server on port 8000:
+
+1. **Any cloud VM / VPS** (simplest): install Docker on the VM, clone this
+   repo, `python scripts/download_model.py`, then `docker compose up -d`.
+   Open port 8000 (put nginx/caddy + HTTPS in front for production).
+   Needs ~8–10 GB RAM for CPU inference of the 9B Q4 model (less with GPU).
+2. **Hugging Face Spaces (Docker SDK)**: create a Space, push this code,
+   add a persistent volume for `qdrant_storage/` and the `.gguf`.
+3. **Cloud container services** (Fly.io, Railway, Render, AWS ECS…):
+   build the provided `Dockerfile`, mount a volume for the model + storage.
 
 ## Repository layout
 
 ```
-scripts/download_model.py    # fetch weights from Hugging Face
-scripts/upload_model.sh      # one-time upload of weights to Hugging Face
-models/                      # local weights (git-ignored)
-docs/AI_AGENT_ACCESS.md      # how to give an AI coding agent edit access
-AGENTS.md                    # rules agents must follow in this repo
+firewall.py                 # Layer 1 vector search + HTTP/CLI + Layer 2 wiring
+layer2_judge.py             # Layer 2 LLM judge (GGUF via llama-cpp-python)
+scratch*.py                 # embedding-threshold experiments
+scripts/download_model.py   # fetch GGUF + qdrant_storage from Hugging Face
+scripts/upload_model.sh     # one-time upload of big files to Hugging Face
+Dockerfile / docker-compose.yml
+docs/AI_AGENT_ACCESS.md     # how to grant an AI coding agent edit access
+AGENTS.md                   # rules agents must follow in this repo
 ```
-
-## Give an AI agent access to edit & develop
-
-See **[docs/AI_AGENT_ACCESS.md](docs/AI_AGENT_ACCESS.md)** — three ways
-(collaborator invite, GitHub App, or a fine-grained token) plus how to protect
-`main` with pull requests so agents develop safely.
 
 ## Rules for everyone (human or agent)
 
-1. **Never commit model weights or any file over ~10 MB.** `.gitignore` blocks
-   them; do not bypass it.
+1. **Never commit model weights, `qdrant_storage/`, `datasets/`, or `venv/`.**
+   `.gitignore` blocks them; do not bypass it.
 2. Develop on a branch, open a pull request, review, then merge.
-3. Never commit tokens/secrets — they go in GitHub Actions secrets or the
-   agent's settings.
+3. Never commit tokens/secrets — they go in `.env` (git-ignored).

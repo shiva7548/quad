@@ -1,35 +1,24 @@
-# --- Never commit model weights / large binaries to git ---
-# (GitHub hard limit is 100 MB per file; weights live on Hugging Face Hub)
+# Secrets
+.env
+.env.local
+*.pem
+*.key
+*.token
+
+# Python
+venv/
+.venv/
+__pycache__/
+*.pyc
+
+# Local data / model artifacts (hosted on Hugging Face, never in git)
+qdrant_storage/
+datasets/
 models/
-*.safetensors
 *.gguf
+*.safetensors
 *.pt
 *.pth
 *.ckpt
 *.bin
 *.onnx
-*.h5
-*.tflite
-*.pkl
-*.joblib
-
-# --- Python ---
-__pycache__/
-*.py[cod]
-*.egg-info/
-.eggs/
-build/
-dist/
-.venv/
-venv/
-env/
-
-# --- Environments / secrets ---
-.env
-.env.*
-*.token
-
-# --- Editors / OS ---
-.idea/
-.vscode/
-.DS_Store
