@@ -1,0 +1,35 @@
+# --- Never commit model weights / large binaries to git ---
+# (GitHub hard limit is 100 MB per file; weights live on Hugging Face Hub)
+models/
+*.safetensors
+*.gguf
+*.pt
+*.pth
+*.ckpt
+*.bin
+*.onnx
+*.h5
+*.tflite
+*.pkl
+*.joblib
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+
+# --- Environments / secrets ---
+.env
+.env.*
+*.token
+
+# --- Editors / OS ---
+.idea/
+.vscode/
+.DS_Store
