@@ -29,7 +29,22 @@ from layer2_judge import Layer2Judge
 COLLECTION_NAME = "prompt_firewall"
 EMBEDDING_MODEL_NAME = "BAAI/bge-large-en-v1.5"
 SIMILARITY_THRESHOLD = 0.78
-QDRANT_URL = os.getenv("QDRANT_URL", "http://qdrant:6333")
+def _default_qdrant_url():
+    """Pick the right Qdrant address for where this process runs.
+
+    Inside docker-compose the database is the service `qdrant`; on the host it is
+    published on localhost. Without this, a local run would try to resolve the
+    compose hostname and fail. docker-compose.yml still sets QDRANT_URL
+    explicitly, so this default only affects bare `python firewall.py`.
+    """
+    explicit = os.getenv("QDRANT_URL")
+    if explicit:
+        return explicit
+    in_docker = os.path.exists("/.dockerenv") or os.getenv("FIREWALL_IN_DOCKER") == "1"
+    return "http://qdrant:6333" if in_docker else "http://localhost:6333"
+
+
+QDRANT_URL = _default_qdrant_url()
 FORCE_REBUILD = os.getenv("FORCE_REBUILD", "false").lower() in {"1", "true", "yes"}
 FIREWALL_HOST = os.getenv("FIREWALL_HOST", "0.0.0.0")
 FIREWALL_PORT = int(os.getenv("FIREWALL_PORT", "8000"))

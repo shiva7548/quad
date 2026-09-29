@@ -453,6 +453,21 @@ class TestHelpers(FirewallFlowTestCase):
         self.assertIn("session_id: sessionId()", self.firewall.INDEX_HTML)
         self.assertIn("Reset session", self.firewall.INDEX_HTML)
 
+    def test_qdrant_url_defaults_to_localhost_on_the_host(self):
+        saved = os.environ.pop("QDRANT_URL", None)
+        os.environ.pop("FIREWALL_IN_DOCKER", None)
+        try:
+            self.assertEqual(self.firewall._default_qdrant_url(), "http://localhost:6333")
+            os.environ["FIREWALL_IN_DOCKER"] = "1"
+            self.assertEqual(self.firewall._default_qdrant_url(), "http://qdrant:6333")
+            os.environ["QDRANT_URL"] = "http://other:6333"
+            self.assertEqual(self.firewall._default_qdrant_url(), "http://other:6333")
+        finally:
+            os.environ.pop("FIREWALL_IN_DOCKER", None)
+            os.environ.pop("QDRANT_URL", None)
+            if saved is not None:
+                os.environ["QDRANT_URL"] = saved
+
     def test_search_top_tolerates_old_clients(self):
         class OldClient:
             def search(self, collection_name=None, query_vector=None, limit=1):

@@ -393,6 +393,91 @@ Confirm the vectors are already loaded (no rebuild needed):
 curl -s localhost:6333/collections/prompt_firewall | python -m json.tool | grep points_count
 ```
 
+## Fresh clone after deleting the folder? Re-attach the old big files
+
+`quad` is gone but `qdrant_storage/` (and maybe the 5.8 GB `.gguf`) still exist
+somewhere - often in a **different** folder, because the Docker volume path used
+`$PWD` at the time you ran it. Two ways to keep them.
+
+### The important fact
+
+Qdrant reads whatever folder you mount, and the firewall only talks HTTP to
+Qdrant. **The storage does not have to live inside the code folder.** Only the
+`.gguf` needs to be in the folder (or pointed at with `LAYER2_MODEL_PATH`).
+
+### Step 1 — find what survived
+
+```bash
+cd quad                                              # the fresh clone
+bash scripts/attach_storage.sh --find
+```
+
+It searches `$PWD`, the parent, `$HOME`, `/data`, `/opt`, `/mnt`, `/media`, `/srv`
+for `qdrant_storage` folders and large `.gguf` files, and also reports the Docker
+side (containers named `qdrant` and their mounts, plus named volumes):
+
+```
+qdrant_storage folders:
+  /home/you/old-quad/qdrant_storage                     1.4G  <-- has the prompt_firewall collection
+GGUF model files (>50 MB):
+  /home/you/Downloads/Qwen3.5-9B.Q4_K_M.gguf            5.4G
+docker containers matching 'qdrant':
+  3f1c…  qdrant  Up 2 days
+  mounts:  /home/you/old-quad/qdrant_storage -> /qdrant/storage
+```
+
+### Step 2 — choose one
+
+**(a) Don't move anything — just mount it where it lives** (cleanest, works even
+if the folder is on another disk):
+
+```bash
+bash scripts/attach_storage.sh --docker          # prints the command
+bash scripts/attach_storage.sh --docker --run    # or run it
+```
+
+**(b) Move it into the new clone** (then mount `./qdrant_storage` as usual):
+
+```bash
+bash scripts/attach_storage.sh --use /home/you/old-quad/qdrant_storage
+bash scripts/attach_storage.sh --use-model /home/you/Downloads/Qwen3.5-9B.Q4_K_M.gguf
+```
+
+Add `--copy` to keep the original, `--force` to overwrite one that is already
+there. If the move fails because Qdrant is using it: `docker stop qdrant` first.
+
+**(c) Re-download instead** (public repo, no token, ~6 GB):
+
+```bash
+python scripts/download_model.py     # fetches the .gguf AND qdrant_storage together
+```
+
+This restores the vector index exactly: the Hugging Face repo contains the full
+Qdrant layout, including every segment's `vector_storage/` and `payload_storage/`
+(verified), so no re-embedding and no `HF_TOKEN` are needed.
+
+### Docker name already in use / storage looks empty
+
+```bash
+docker ps -a --filter name=qdrant          # reuse it
+docker start qdrant
+docker inspect qdrant --format '{{range .Mounts}}{{.Source}} -> {{.Destination}}{{"\n"}}{{end}}'
+```
+
+If that mount points at the old path, either leave it (the firewall does not
+care) or recreate the container against the new folder:
+
+```bash
+docker rm -f qdrant
+docker run -d --name qdrant -p 6333:6333 -v "$PWD/qdrant_storage:/qdrant/storage" qdrant/qdrant:latest
+```
+
+Then confirm the vectors are really there (a non-zero count means no rebuild):
+
+```bash
+curl -s localhost:6333/collections/prompt_firewall | python -m json.tool | grep points_count
+```
+
 ## Quick start (local, CPU)
 
 ```bash

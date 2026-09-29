@@ -55,7 +55,9 @@ python scripts/download_model.py        # GGUF + qdrant_storage (skips venv/)
    real GGUF judge; run it by hand when a model is available.
 4. Do not modify `.gitignore` to unblock binary files.
 5. Do not commit secrets, tokens, or `.env` files.
-6. Layer 2 must stay optional: if the GGUF or `llama-cpp-python` is missing,
+6. `firewall._default_qdrant_url()` must keep working for both setups: the host
+   (`localhost:6333`) and docker-compose (`qdrant:6333`). Do not hardcode either.
+7. Layer 2 must stay optional: if the GGUF or `llama-cpp-python` is missing,
    `firewall.py` falls back to Layer 1 (+ pre-scan) behaviour — keep it that way.
 7. Keep `context_rules.py` free of heavy imports (no torch, sentence-transformers,
    qdrant, llama-cpp-python). It is the only module the offline tests can load.
@@ -75,6 +77,7 @@ layer2_judge.py                # Layer 2 judge: prompt, message builder, reply p
 tests/test_context_rules.py    # alias/resolve/fence logic tests (no model, no network)
 scripts/doctor.py              # preflight check: model path lookup, deps, Qdrant, port
 scripts/update_branch.sh       # in-place update of an existing folder (keeps model/DB)
+scripts/attach_storage.sh      # find/move/mount an existing qdrant_storage or .gguf
 scripts/ui_preview.py          # Web UI preview with canned /health + /check (no deps)
 scripts/gguf_smoke_test.py     # smoke-test / eval the GGUF judge on prompts or a dataset
 scripts/demo_context_pairs.py  # allow/block demo pairs, --full runs the real stack
