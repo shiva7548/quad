@@ -325,11 +325,79 @@ The GGUF is a single self-contained file — no sidecar config, tokenizer or
 adapter files, so a plain `cp`/`scp`/USB copy is enough. Re-running
 `scripts/download_model.py` on the target does the same thing from the Hub.
 
+## Already have a `quad` folder? Update it in place (the "already exists" error)
+
+```
+fatal: destination path 'quad' already exists and is not an empty directory
+```
+
+That happens because you are cloning on top of an earlier copy. **Do not delete
+it if it already holds the model** — the 5.8 GB `.gguf` and `qdrant_storage/`
+are git-ignored, so updating the code leaves them byte-for-byte untouched.
+
+### Option 1 — three commands (always works)
+
+```bash
+cd quad                                                # into the old folder
+git fetch origin arena/01a0eb9a-quad
+git checkout -f -B arena/01a0eb9a-quad FETCH_HEAD
+```
+
+### Option 2 — the updater script (also handles a ZIP folder with no `.git`)
+
+```bash
+cd quad
+curl -fsSL -o update_branch.sh \
+  https://raw.githubusercontent.com/shiva7548/quad/arena/01a0eb9a-quad/scripts/update_branch.sh
+bash update_branch.sh              # add --yes to skip the prompt
+```
+
+It detects whether the folder is a git clone or plain unpacked files, copies any
+local edits to `../quad-backup-<timestamp>/`, switches the code to the branch and
+prints the verification. Both paths were tested end-to-end: after the update the
+folder is on `arena/01a0eb9a-quad` and `python -m unittest discover -s tests -t .`
+reports `Ran 63 tests … OK`.
+
+### What survives, guaranteed
+
+| Item | After updating |
+|---|---|
+| `Qwen3.5-9B.Q4_K_M.gguf` (5.8 GB) | **untouched** — git-ignored, no re-download |
+| `qdrant_storage/` (the ~14k vectors) | **untouched** — no rebuild, no `HF_TOKEN` needed |
+| `datasets/` | **untouched** |
+| `venv/`, `.venv/`, `.env` | **untouched** — and `requirements.txt` is identical to `main`, so **no new dependencies to install** |
+| `*.py`, `README.md`, `AGENTS.md` … | replaced by the new branch; your local edits are backed up first |
+
+Verify in one command: `python scripts/doctor.py` — it prints the path where it
+found the model, so you can see immediately that nothing was lost.
+
+### Already started Qdrant before? (docker "name already in use")
+
+```bash
+docker start qdrant          # reuse the existing container and its volume
+docker inspect qdrant --format '{{range .Mounts}}{{.Source}} -> {{.Destination}}{{"\n"}}{{end}}'
+```
+
+If that container points at a *different* folder than the one you are running
+from, recreate it so it uses this folder's storage:
+
+```bash
+docker rm -f qdrant
+docker run -d --name qdrant -p 6333:6333 \
+  -v "$PWD/qdrant_storage:/qdrant/storage" qdrant/qdrant:latest
+```
+
+Confirm the vectors are already loaded (no rebuild needed):
+
+```bash
+curl -s localhost:6333/collections/prompt_firewall | python -m json.tool | grep points_count
+```
+
 ## Quick start (local, CPU)
 
 ```bash
-# 1. Get the code (git clone is what puts the code on your machine)
-git clone https://github.com/shiva7548/quad.git
+# 1. Get the code (use -b until PR #2 is merged into main)
+git clone -b arena/01a0eb9a-quad --single-branch https://github.com/shiva7548/quad.git quad
 cd quad
 
 # 2. Install dependencies (do NOT copy a venv around)

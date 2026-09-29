@@ -74,6 +74,7 @@ context_rules.py               # alias/symbol detection, resolution, XML fencing
 layer2_judge.py                # Layer 2 judge: prompt, message builder, reply parser
 tests/test_context_rules.py    # alias/resolve/fence logic tests (no model, no network)
 scripts/doctor.py              # preflight check: model path lookup, deps, Qdrant, port
+scripts/update_branch.sh       # in-place update of an existing folder (keeps model/DB)
 scripts/ui_preview.py          # Web UI preview with canned /health + /check (no deps)
 scripts/gguf_smoke_test.py     # smoke-test / eval the GGUF judge on prompts or a dataset
 scripts/demo_context_pairs.py  # allow/block demo pairs, --full runs the real stack
