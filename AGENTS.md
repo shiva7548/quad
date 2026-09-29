@@ -43,9 +43,12 @@ python scripts/download_model.py        # GGUF + qdrant_storage (skips venv/)
 3. Before committing Python changes run:
    ```bash
    python -m compileall firewall.py context_rules.py layer2_judge.py scripts/ tests/
-   python -m unittest discover -s tests -t .     # must stay green
+   python -m unittest discover -s tests -t .     # 53 tests, no model/Qdrant/network
    python scripts/demo_context_pairs.py          # detector expectations must pass
+   python scripts/gguf_smoke_test.py --pre-scan-only   # same engine, report form
    ```
+   `scripts/gguf_smoke_test.py --model <gguf>` is the only script that exercises the
+   real GGUF judge; run it by hand when a model is available.
 4. Do not modify `.gitignore` to unblock binary files.
 5. Do not commit secrets, tokens, or `.env` files.
 6. Layer 2 must stay optional: if the GGUF or `llama-cpp-python` is missing,
@@ -65,8 +68,10 @@ python scripts/download_model.py        # GGUF + qdrant_storage (skips venv/)
 firewall.py                    # Layer 1 + pre-scan + Layer 2 + hardening, HTTP server, CLI
 context_rules.py               # alias/symbol detection, resolution, XML fencing, sessions
 layer2_judge.py                # Layer 2 judge: prompt, message builder, reply parser
-tests/test_context_rules.py    # offline tests (no model, no Qdrant, no network)
+tests/test_context_rules.py    # alias/resolve/fence logic tests (no model, no network)
+scripts/gguf_smoke_test.py     # smoke-test / eval the GGUF judge on prompts or a dataset
 scripts/demo_context_pairs.py  # allow/block demo pairs, --full runs the real stack
+tests/test_firewall_flow.py    # request flow with stubbed deps (no model, no Qdrant)
 scripts/download_model.py      # fetch big files from Hugging Face
 scripts/upload_model.sh        # one-time upload of big files to Hugging Face
 scratch*.py                    # threshold experiments
