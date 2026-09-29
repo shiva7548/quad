@@ -157,8 +157,8 @@ def check_model(report, model_arg=None):
 
     if not resolved:
         report.bad("judge model", "\n".join(lines),
-                   "python scripts/download_model.py        # fetches the GGUF (5.8 GB, "
-                   "public repo, no token)")
+                   "python scripts/download_model.py --no-datasets   # fetches the GGUF (5.8 GB) "
+                   "AND the prebuilt qdrant_storage; public repo, no token")
         report.fixes.append("or: put the .gguf anywhere and point at it:  "
                             "export LAYER2_MODEL_PATH=/absolute/path/model.gguf")
         return None
@@ -214,6 +214,30 @@ def check_embedder_cache(report):
                 "or pre-download:  python -c \"from sentence_transformers import "
                 "SentenceTransformer as S; S('BAAI/bge-large-en-v1.5')\"")
     return False
+
+
+def check_storage_permissions(report):
+    """Docker creates ./qdrant_storage as root; downloading into it later fails.
+
+    Order matters: run `python scripts/download_model.py` BEFORE the first
+    `docker run -v "$PWD/qdrant_storage:..."`, or fix the ownership afterwards.
+    """
+    path = os.path.join(os.getcwd(), "qdrant_storage")
+    if not os.path.isdir(path):
+        return
+    try:
+        owner = os.stat(path).st_uid
+        me = os.getuid()
+    except (AttributeError, OSError):  # non-POSIX
+        return
+    if owner != me:
+        report.warn("storage perms",
+                    "qdrant_storage/ is owned by uid %d, you are uid %d\n"
+                    "docker created it as root, so writing into it (downloads, "
+                    "rebuilds) will fail with permission denied" % (owner, me),
+                    "sudo chown -R $(id -u):$(id -g) qdrant_storage")
+    else:
+        report.ok("storage perms", "qdrant_storage/ is writable by you")
 
 
 def check_qdrant(report, url):
@@ -355,6 +379,7 @@ def main():
     check_packages(report)
     model_path = check_model(report, args.model)
     check_embedder_cache(report)
+    check_storage_permissions(report)
     check_qdrant(report, args.qdrant_url)
     check_config(report)
     check_port(report)

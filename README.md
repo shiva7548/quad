@@ -528,6 +528,11 @@ Notes that save time:
 * Without a GPU, judge calls take roughly 10-25 s, so keep `LAYER2_MODE=gray`.
 * Forgot step 4? `firewall.py` now stops with the exact docker command instead of
   a traceback.
+* **Order matters:** run step 3 (download) *before* step 4 (docker). If Docker
+  creates `./qdrant_storage` first it is owned by root, and the later download
+  into it fails with `permission denied`. `doctor.py` detects that and prints the
+  one-line fix:
+  `sudo chown -R $(id -u):$(id -g) qdrant_storage`.
 
 ## Quick start (local, CPU)
 
