@@ -54,6 +54,7 @@ done
 say()  { printf '%s\n' "$*"; }
 die()  { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 human() { du -sh "$1" 2>/dev/null | cut -f1; }
+canon() { realpath "$1" 2>/dev/null || readlink -f "$1" 2>/dev/null || printf '%s' "$1"; }
 
 in_quad_folder() { [ -f firewall.py ] && [ -f layer2_judge.py ]; }
 
@@ -63,7 +64,7 @@ find_storage() {
   for base in "${SEARCH_ROOTS[@]}"; do
     [ -d "$base" ] || continue
     while IFS= read -r found; do
-      [ -n "$found" ] && printf '%s\n' "$found"
+      [ -n "$found" ] && canon "$found"
     done < <(find "$base" -maxdepth 4 -type d -name qdrant_storage 2>/dev/null)
   done | sort -u
 }
@@ -73,7 +74,7 @@ find_models() {
   for base in "${SEARCH_ROOTS[@]}"; do
     [ -d "$base" ] || continue
     while IFS= read -r found; do
-      [ -n "$found" ] && printf '%s\n' "$found"
+      [ -n "$found" ] && canon "$found"
     done < <(find "$base" -maxdepth 4 -type f -name "*.gguf" -size +50M 2>/dev/null)
   done | sort -u
 }
