@@ -478,6 +478,57 @@ Then confirm the vectors are really there (a non-zero count means no rebuild):
 curl -s localhost:6333/collections/prompt_firewall | python -m json.tool | grep points_count
 ```
 
+## Fresh start (nothing on disk) — the six commands, verified
+
+Run these in order. Each line is checked against the repo, and the "you should
+see" notes tell you whether it worked before you move on.
+
+```bash
+# 1. code (from the branch; plain clone gives the OLD code until PR #2 is merged)
+git clone -b arena/01a0eb9a-quad --single-branch https://github.com/shiva7548/quad.git quad
+cd quad
+#    you should see: context_rules.py and scripts/doctor.py exist
+#                    ls context_rules.py scripts/doctor.py
+
+# 2. libraries (~2-4 min; the extra index avoids a 20 min source compile)
+pip install -r requirements.txt --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
+#    you should see: Successfully installed ... llama-cpp-python ... sentence-transformers ...
+
+# 3. model + prebuilt vector DB (~5.9 GB, public repo, no token)
+python scripts/download_model.py --no-datasets
+#    you should see: Qwen3.5-9B.Q4_K_M.gguf  and  qdrant_storage/  in this folder
+#    (drop --no-datasets for the full 6.4 GB if you also want datasets/ for a rebuild)
+
+# 4. vector DB (start it from INSIDE the quad folder so $PWD is right)
+docker run -d --name qdrant -p 6333:6333 -v "$PWD/qdrant_storage:/qdrant/storage" qdrant/qdrant:latest
+curl -s localhost:6333/collections/prompt_firewall | python -m json.tool | grep points_count
+#    you should see: a non-zero points_count (the ~14k vectors are already in the volume)
+
+# 5. verify
+python scripts/doctor.py
+#    you should see: "judge model  .../Qwen3.5-9B.Q4_K_M.gguf (5.38 GB)  ok"
+#                    "Qdrant  ... prompt_firewall: <N> points (1024-d Cosine)  ok"
+#                    "READY - start it with: python firewall.py"
+
+# 6. run
+python firewall.py            # Web UI -> http://localhost:8000/  (banner shows Layer 2 status)
+python firewall.py --cli      # or the interactive CLI
+```
+
+Notes that save time:
+
+* `export QDRANT_URL=http://localhost:6333` is **no longer needed** for a local
+  run — the default is `localhost:6333` on the host and `qdrant:6333` inside
+  Docker. Set it only if Qdrant is on another host or port.
+* The **first** `firewall.py` run also downloads the embedding model
+  `BAAI/bge-large-en-v1.5` (~1.3 GB) from Hugging Face. It is cached in
+  `~/.cache/huggingface`, so it happens once. `doctor.py` warns you beforehand.
+* Requirements: ~8 GB free RAM for the 9B judge (10-12 GB comfortable), ~7 GB
+  free disk for model + DB, Docker for the vector database.
+* Without a GPU, judge calls take roughly 10-25 s, so keep `LAYER2_MODE=gray`.
+* Forgot step 4? `firewall.py` now stops with the exact docker command instead of
+  a traceback.
+
 ## Quick start (local, CPU)
 
 ```bash
@@ -624,7 +675,6 @@ tests/test_context_rules.py      # alias/resolve/fence/session/parser logic (34 
 tests/test_firewall_flow.py      # full request flow with stubbed deps (19 tests)
 scripts/gguf_smoke_test.py       # run the GGUF judge on prompts or your own dataset
 scripts/demo_context_pairs.py    # allow/block demo pairs (--full runs the real stack)
-scripts/download_model.py        # fetch GGUF + qdrant_storage from Hugging Face
 scripts/upload_model.sh          # one-time upload of big files to Hugging Face
 scratch*.py                      # embedding-threshold experiments
 Dockerfile / docker-compose.yml

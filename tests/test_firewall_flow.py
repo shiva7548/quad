@@ -439,6 +439,32 @@ class TestWebUIFlagsLayer2(FirewallFlowTestCase):
         self.assertIn("vectors", self.firewall.INDEX_HTML)
 
 
+class TestQdrantConnectionError(FirewallFlowTestCase):
+    """Forgetting to start Qdrant must give instructions, not a traceback."""
+
+    def test_unreachable_qdrant_exits_with_a_hint(self):
+        class Unreachable:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def collection_exists(self, *args, **kwargs):
+                raise RuntimeError("Connection refused: qdrant:6333")
+
+        original = self.firewall.QdrantClient
+        self.firewall.QdrantClient = Unreachable
+        try:
+            with self.assertRaises(SystemExit) as caught:
+                self.firewall.connect_qdrant("http://localhost:6333")
+        finally:
+            self.firewall.QdrantClient = original
+        self.assertEqual(caught.exception.code, 1)
+
+    def test_reachable_qdrant_returns_client_and_flag(self):
+        client, exists = self.firewall.connect_qdrant("http://localhost:6333")
+        self.assertTrue(exists)
+        self.assertIsInstance(client, FakeQdrant)
+
+
 class TestHelpers(FirewallFlowTestCase):
     def test_clean_session_id(self):
         self.assertIsNone(self.firewall.clean_session_id(""))

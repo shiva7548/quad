@@ -128,16 +128,42 @@ def extract_bad_prompts_from_csv(dataset_name, df):
     return valid_prompts
 
 
+def connect_qdrant(url=None):
+    """Create the Qdrant client, failing with an actionable message.
+
+    Without this, forgetting to start Qdrant produces a raw connect-exception
+    traceback - the most common first-run stumble.
+    """
+    url = url or QDRANT_URL
+    client = QdrantClient(url)
+    try:
+        exists = client.collection_exists(COLLECTION_NAME)
+    except Exception as exc:
+        print("\n" + "=" * 66)
+        print(f"❌ Cannot reach Qdrant at {url}")
+        print(f"   {str(exc)[:160]}")
+        print("=" * 66)
+        print("\nStart it first (this mounts the downloaded vectors):")
+        print('  docker run -d --name qdrant -p 6333:6333 \\')
+        print('    -v "$PWD/qdrant_storage:/qdrant/storage" qdrant/qdrant:latest')
+        print("\nAlready have a container?  docker start qdrant")
+        print("Qdrant on another host?    export QDRANT_URL=http://host:6333")
+        print("Full diagnosis:            python scripts/doctor.py")
+        print("\nNothing was embedded or changed - start Qdrant and re-run.\n")
+        raise SystemExit(1)
+    return client, exists
+
+
 def setup_database_and_embed():
     """Initializes client and checks if ingestion is needed."""
     print("1. Initializing Embedding Model and Qdrant Client...")
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = SentenceTransformer(EMBEDDING_MODEL_NAME, device=device)
     print(f"Model loaded on {device}.")
-    client = QdrantClient(QDRANT_URL)
+    client, collection_exists = connect_qdrant()
 
     # --- CHECK IF DATA IS ALREADY IN QDRANT ---
-    if client.collection_exists(COLLECTION_NAME) and not FORCE_REBUILD:
+    if collection_exists and not FORCE_REBUILD:
         collection_info = client.get_collection(COLLECTION_NAME)
         if collection_info.points_count > 0:
             print(f"✅ Found existing collection '{COLLECTION_NAME}' with {collection_info.points_count} vectors.")
