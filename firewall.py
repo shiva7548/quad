@@ -474,6 +474,17 @@ INDEX_HTML = """<!DOCTYPE html>
     .ALLOW { background: #e7f6e7; }
     .ERROR { background: #fff3cd; }
     .meta { color: #555; font-size: 0.85rem; margin-top: 0.5rem; }
+    .status { margin: 0.75rem 0 1rem; padding: 0.7rem 0.9rem; border-radius: 8px;
+              background: #f5f6f8; border: 1px solid #e2e5ea; font-size: 0.9rem;
+              line-height: 1.7; }
+    .status .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%;
+                   margin-right: 0.45rem; vertical-align: middle; }
+    .status .dot.on { background: #2e9e4f; }
+    .status .dot.off { background: #d9822b; }
+    .status code { background: #e7e9ee; padding: 0.05rem 0.3rem; border-radius: 3px; }
+    .status .hint { color: #666; }
+    .badge { font-size: 0.85rem; margin: 0.5rem 0 0.25rem; color: #444; }
+    .badge strong { color: #111; }
   </style>
 </head>
 <body>
@@ -482,6 +493,7 @@ INDEX_HTML = """<!DOCTYPE html>
      Borderline or alias-hidden prompts go to Layer 2, which grounds the user's
      redefined words, resolves them and judges the resolved request.
      This tab keeps a session id, so Layer 2 also sees the last 6 turns.</p>
+  <div id="status" class="status">Checking firewall status…</div>
   <form id="f">
     <label for="prompt">Prompt</label>
     <textarea id="prompt" name="prompt" required placeholder="Type a prompt…"></textarea>
@@ -494,6 +506,69 @@ INDEX_HTML = """<!DOCTYPE html>
     const form = document.getElementById("f");
     const out = document.getElementById("out");
     const meta = document.getElementById("meta");
+    const statusBox = document.getElementById("status");
+
+    // ---- Layer 1 / Layer 2 connection status, straight from /health ----
+    function line(dotOn, label, detail, hint) {
+      const row = document.createElement("div");
+      const dot = document.createElement("span");
+      dot.className = "dot " + (dotOn ? "on" : "off");
+      row.appendChild(dot);
+      const strong = document.createElement("strong");
+      strong.textContent = label + ": ";
+      row.appendChild(strong);
+      const rest = document.createElement("span");
+      rest.textContent = detail;
+      row.appendChild(rest);
+      if (hint) {
+        const hintEl = document.createElement("div");
+        hintEl.className = "hint";
+        hintEl.style.paddingLeft = "1.35rem";
+        hintEl.textContent = hint;
+        row.appendChild(hintEl);
+      }
+      return row;
+    }
+    async function refreshStatus() {
+      statusBox.textContent = "Checking firewall status…";
+      let h;
+      try {
+        h = await (await fetch("/health")).json();
+      } catch (err) {
+        statusBox.replaceChildren(line(false, "Firewall", "server not reachable (" + err + ")"));
+        return;
+      }
+      const l1 = h.layer1 || {};
+      const l2 = h.layer2 || {};
+      const settings = h.settings || {};
+      const rows = [];
+      const l1Detail = (l1.reachable === false)
+        ? "not reachable"
+        : ((l1.points || 0).toLocaleString() + " vectors"
+           + (l1.vector_size ? " · " + l1.vector_size + "-d" : ""));
+      rows.push(line(l1.reachable !== false, "Layer 1 (vector search)", l1Detail,
+                     l1.reachable === false
+                       ? "Qdrant is not answering: " + (l1.error || "check that the container is up")
+                       : "collection: " + (l1.collection || "-")));
+      const label = "Layer 2 (LLM judge)";
+      if (l2.available) {
+        rows.push(line(true, label,
+                       "connected · " + ((l2.model || "").split("/").pop() || "model")
+                       + " · mode " + l2.mode,
+                       "judges borderline and alias-flagged prompts; "
+                       + settings.session_window + "-turn session window, "
+                       + "auto-harden " + (settings.auto_harden ? "on" : "off")));
+      } else {
+        rows.push(line(false, label,
+                       "NOT connected — running Layer 1 only (mode " + (l2.mode || "-") + ")",
+                       "fix: put the .gguf in this folder (or set LAYER2_MODEL_PATH) and restart; "
+                       + "check with: python scripts/doctor.py"));
+      }
+      statusBox.replaceChildren(...rows);
+    }
+    refreshStatus();
+    setInterval(refreshStatus, 20000);
+
     function sessionId() {
       let sid = sessionStorage.getItem("fw_session");
       if (!sid) {
@@ -516,10 +591,29 @@ INDEX_HTML = """<!DOCTYPE html>
         body: JSON.stringify({ prompt, session_id: sessionId() }),
       });
       const data = await res.json();
+
+      // Which layer actually decided this prompt?
+      const badge = document.createElement("div");
+      badge.className = "badge";
+      if (data.layer2) {
+        const l2 = data.layer2;
+        badge.textContent = "Decided by Layer 2 (LLM judge): " + l2.verdict
+          + (l2.rule_triggered ? " · rule " + l2.rule_triggered : "")
+          + (l2.object_type ? " · " + (l2.action || "?") + "(" + l2.object_type + ")" : "")
+          + (l2.confidence !== undefined ? " · confidence " + l2.confidence : "");
+      } else if (data.status && data.status !== "ERROR") {
+        badge.textContent = "Decided by Layer 1 only (fast path)"
+          + (data.score !== undefined ? " · score " + data.score : "")
+          + (data.auto_hardened && data.auto_hardened.added
+              ? " · learned into Layer 1 (zero-day)" : "");
+      } else {
+        badge.textContent = data.reason || "error";
+      }
+
       const box = document.createElement("div");
       box.className = "result " + (data.status || "ERROR");
       box.textContent = JSON.stringify(data, null, 2);
-      out.replaceChildren(box);
+      out.replaceChildren(badge, box);
       meta.textContent = "session " + (data.session_id || "-") +
         " · " + (data.turns_in_window || 0) + " earlier turn(s) in window";
     });
@@ -593,6 +687,52 @@ def run_cli(model, client, judge=None):
         print_check_result(prompt, result)
 
 
+def health_payload(judge=None, client=None):
+    """Machine-readable status, used by the Web UI banner and by monitors.
+
+    The UI is not the sandbox browser talking to a backend elsewhere: this same
+    process serves both, so one GET /health is enough to tell whether Layer 2 is
+    live. Kept simple and exception-proof - a Qdrant hiccup must not take the
+    page down.
+    """
+    payload = {
+        "status": "ok",
+        "layer1": {
+            "collection": COLLECTION_NAME,
+            "vector_size": None,
+            "points": None,
+            "reachable": None,
+        },
+        "layer2": {
+            "available": bool(judge is not None and getattr(judge, "available", False)),
+            "mode": LAYER2_MODE,
+            "model": getattr(judge, "model_path", None) if judge is not None else None,
+            "min_score": LAYER2_MIN_SCORE,
+            "force_on_alias": LAYER2_FORCE_ON_ALIAS,
+            "confirm_blocks": LAYER2_CONFIRM_BLOCKS,
+        },
+        "settings": {
+            "block_threshold": SIMILARITY_THRESHOLD,
+            "session_window": SESSION_WINDOW,
+            "auto_harden": AUTO_HARDEN,
+        },
+    }
+    if client is not None:
+        try:
+            info = client.get_collection(COLLECTION_NAME)
+            vectors = getattr(info.config.params, "vectors", None)
+            payload["layer1"].update({
+                "reachable": True,
+                "points": info.points_count,
+                "vector_size": getattr(vectors, "size", None),
+            })
+        except Exception as exc:
+            payload["layer1"]["reachable"] = False
+            payload["layer1"]["error"] = str(exc)[:120]
+    payload.update(SESSIONS.stats())
+    return payload
+
+
 def make_handler(model, client, judge=None):
     class FirewallHandler(BaseHTTPRequestHandler):
         def _send_json(self, code, payload):
@@ -614,14 +754,7 @@ def make_handler(model, client, judge=None):
                 self.wfile.write(body)
                 return
             if path == "/health":
-                self._send_json(200, {
-                    "status": "ok",
-                    "layer2": bool(judge and judge.available),
-                    "layer2_mode": LAYER2_MODE,
-                    "session_window": SESSION_WINDOW,
-                    "auto_harden": AUTO_HARDEN,
-                    **SESSIONS.stats(),
-                })
+                self._send_json(200, health_payload(judge, client))
                 return
             self._send_json(404, {"status": "ERROR", "reason": "Not found"})
 
@@ -661,8 +794,16 @@ def run_server(model, client, judge=None):
     print("=" * 50)
     print(f"Threshold: {SIMILARITY_THRESHOLD} | Layer 2 mode: "
           f"{LAYER2_MODE if (judge and judge.available) else 'off'}")
+    if judge and judge.available:
+        print(f"Layer 2: connected ({judge.model_path})")
+    else:
+        print("Layer 2: NOT connected - Layer 1 + alias pre-scan only. "
+              "Fix: place the .gguf in this folder or set LAYER2_MODEL_PATH, "
+              "then run: python scripts/doctor.py")
     print(f"Session window: {SESSION_WINDOW} turns | Auto-harden: {AUTO_HARDEN}")
-    print(f"Open http://127.0.0.1:{FIREWALL_PORT}/ to type a prompt.")
+    print(f"Open http://127.0.0.1:{FIREWALL_PORT}/ to type a prompt "
+          f"(the status banner at the top shows Layer 1/Layer 2).")
+    print(f"Status as JSON: http://127.0.0.1:{FIREWALL_PORT}/health")
     print(f"POST JSON to http://127.0.0.1:{FIREWALL_PORT}/check  "
           f'{{"prompt": "...", "session_id": "optional"}}')
     try:

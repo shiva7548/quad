@@ -78,7 +78,12 @@ class FakeQdrant:
         return True
 
     def get_collection(self, *args, **kwargs):
-        return types.SimpleNamespace(points_count=42)
+        # Mirrors the real qdrant-client shape (…config.params.vectors.size).
+        return types.SimpleNamespace(
+            points_count=42,
+            config=types.SimpleNamespace(
+                params=types.SimpleNamespace(
+                    vectors=types.SimpleNamespace(size=1024, distance="Cosine"))))
 
     def query_points(self, collection_name=None, query=None, limit=1):
         text = VECTOR_TEXT.get(tuple(query), "")
@@ -365,6 +370,73 @@ class TestHardeningGates(FirewallFlowTestCase):
                                                 BrokenJudge(), session_id="s10")
         self.assertIn(result["status"], {"ALLOW", "BLOCK"})
         self.assertNotIn("auto_hardened", result)
+
+
+class TestHealthPayload(FirewallFlowTestCase):
+    """The Web UI banner and any monitor read this same payload."""
+
+    def test_reports_layer2_connected_with_model(self):
+        payload = self.firewall.health_payload(self.judge, self.client)
+        self.assertEqual(payload["status"], "ok")
+        self.assertTrue(payload["layer2"]["available"])
+        self.assertEqual(payload["layer2"]["mode"], "gray")
+
+    def test_reports_layer2_down(self):
+        payload = self.firewall.health_payload(None, self.client)
+        self.assertFalse(payload["layer2"]["available"])
+        self.assertIsNone(payload["layer2"]["model"])
+
+    def test_reports_layer2_requested_but_unavailable(self):
+        class DeadJudge:
+            available = False
+            model_path = "Qwen3.5-9B.Q4_K_M.gguf"
+
+        payload = self.firewall.health_payload(DeadJudge(), self.client)
+        self.assertFalse(payload["layer2"]["available"])
+        self.assertEqual(payload["layer2"]["model"], "Qwen3.5-9B.Q4_K_M.gguf")
+
+    def test_reports_layer1_collection(self):
+        payload = self.firewall.health_payload(self.judge, self.client)
+        self.assertTrue(payload["layer1"]["reachable"])
+        self.assertEqual(payload["layer1"]["collection"], "prompt_firewall")
+        self.assertEqual(payload["layer1"]["points"], 42)
+        self.assertEqual(payload["layer1"]["vector_size"], 1024)
+
+    def test_survives_a_broken_qdrant(self):
+        class BrokenClient(FakeQdrant):
+            def get_collection(self, *args, **kwargs):
+                raise RuntimeError("connection refused")
+
+        payload = self.firewall.health_payload(self.judge, BrokenClient())
+        self.assertEqual(payload["status"], "ok")
+        self.assertFalse(payload["layer1"]["reachable"])
+        self.assertIn("connection refused", payload["layer1"]["error"])
+
+    def test_includes_settings_and_sessions(self):
+        payload = self.firewall.health_payload(self.judge, self.client)
+        self.assertEqual(payload["settings"]["session_window"], 6)
+        self.assertIn("sessions", payload)
+
+
+class TestWebUIFlagsLayer2(FirewallFlowTestCase):
+    """The page must be able to tell the operator whether Layer 2 is live."""
+
+    def test_ui_fetches_health(self):
+        self.assertIn('fetch("/health")', self.firewall.INDEX_HTML)
+
+    def test_ui_shows_connected_and_not_connected_states(self):
+        html = self.firewall.INDEX_HTML
+        self.assertIn("Layer 2 (LLM judge)", html)
+        self.assertIn("NOT connected", html)
+        self.assertIn("python scripts/doctor.py", html)
+
+    def test_ui_labels_which_layer_decided(self):
+        html = self.firewall.INDEX_HTML
+        self.assertIn("Decided by Layer 2 (LLM judge)", html)
+        self.assertIn("Decided by Layer 1 only (fast path)", html)
+
+    def test_ui_shows_layer1_vector_count(self):
+        self.assertIn("vectors", self.firewall.INDEX_HTML)
 
 
 class TestHelpers(FirewallFlowTestCase):

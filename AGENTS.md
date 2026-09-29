@@ -48,6 +48,9 @@ python scripts/download_model.py        # GGUF + qdrant_storage (skips venv/)
    python scripts/gguf_smoke_test.py --pre-scan-only   # same engine, report form
    python scripts/doctor.py                            # preflight report
    ```
+   Any change to the Web UI must keep the Layer 2 status banner working: it is
+   driven by `firewall.health_payload()`, which the tests cover. Never let the
+   UI imply Layer 2 is active when `layer2.available` is false.
    `scripts/gguf_smoke_test.py --model <gguf>` is the only script that exercises the
    real GGUF judge; run it by hand when a model is available.
 4. Do not modify `.gitignore` to unblock binary files.
@@ -71,6 +74,7 @@ context_rules.py               # alias/symbol detection, resolution, XML fencing
 layer2_judge.py                # Layer 2 judge: prompt, message builder, reply parser
 tests/test_context_rules.py    # alias/resolve/fence logic tests (no model, no network)
 scripts/doctor.py              # preflight check: model path lookup, deps, Qdrant, port
+scripts/ui_preview.py          # Web UI preview with canned /health + /check (no deps)
 scripts/gguf_smoke_test.py     # smoke-test / eval the GGUF judge on prompts or a dataset
 scripts/demo_context_pairs.py  # allow/block demo pairs, --full runs the real stack
 tests/test_firewall_flow.py    # request flow with stubbed deps (no model, no Qdrant)
