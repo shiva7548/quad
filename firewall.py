@@ -778,21 +778,33 @@ def make_handler(model, client, judge=None):
     class FirewallHandler(BaseHTTPRequestHandler):
         def _send_json(self, code, payload):
             body = json.dumps(payload).encode("utf-8")
-            self.send_response(code)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+            try:
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError):
+                # The browser navigated away or closed the tab - not an error.
+                pass
 
         def do_GET(self):
             path = urlparse(self.path).path
             if path in {"/", "/index.html"}:
                 body = INDEX_HTML.encode("utf-8")
-                self.send_response(200)
-                self.send_header("Content-Type", "text/html; charset=utf-8")
-                self.send_header("Content-Length", str(len(body)))
+                try:
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/html; charset=utf-8")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+                return
+            if path == "/favicon.ico":
+                # Answer quietly - browsers ask for this on every page load.
+                self.send_response(204)
                 self.end_headers()
-                self.wfile.write(body)
                 return
             if path == "/health":
                 self._send_json(200, health_payload(judge, client))
@@ -831,7 +843,7 @@ def run_server(model, client, judge=None):
     handler = make_handler(model, client, judge)
     server = ThreadingHTTPServer((FIREWALL_HOST, FIREWALL_PORT), handler)
     print("\n" + "=" * 50)
-    print("RAG prompt firewall (HTTP)")
+    print("RAG prompt firewall (HTTP) - context layer build")
     print("=" * 50)
     print(f"Threshold: {SIMILARITY_THRESHOLD} | Layer 2 mode: "
           f"{LAYER2_MODE if (judge and judge.available) else 'off'}")

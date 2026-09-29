@@ -29,6 +29,12 @@ import sys
 DEFAULT_REPO = os.environ.get("MODEL_REPO", "linto777/my-qdrant-project")
 DEFAULT_DIR = os.environ.get("MODEL_DIR", ".")
 
+#: The remote repo also contains an old copy of the source (firewall.py,
+#: Dockerfile, requirements.txt, scratch*.py). Downloading those silently
+#: overwrote the local code - the running firewall then looked "old" and Layer 2
+#: was missing. Only these asset patterns are ever fetched now.
+ASSET_PATTERNS = ["*.gguf", "qdrant_storage/**", "datasets/**"]
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Download quad project assets from the Hugging Face Hub.")
@@ -53,16 +59,19 @@ def main() -> None:
 
     if args.model_only:
         allow_patterns = ["*.gguf"]
-        ignore_patterns = ["venv/*", "**/venv/*"]
     elif args.no_datasets:
-        allow_patterns = None
-        ignore_patterns = ["venv/*", "**/venv/*", ".gitattributes", "datasets/*", "**/datasets/*"]
+        allow_patterns = ["*.gguf", "qdrant_storage/**"]
     else:
-        allow_patterns = None
-        ignore_patterns = ["venv/*", "**/venv/*", ".gitattributes"]
+        allow_patterns = list(ASSET_PATTERNS)
+    # Never touch code, venvs or repo metadata, whatever the mode.
+    ignore_patterns = ["venv/*", "**/venv/*", ".gitattributes", "*.py", "*.md",
+                       "Dockerfile", "docker-compose.yml", "requirements.txt",
+                       ".env.example", ".gitignore"]
 
     print(f"Downloading '{args.repo}' (revision {args.revision}) -> {args.dir}")
-    print("  (venv/ is skipped - install packages with: pip install -r requirements.txt)")
+    print("  assets only: " + ", ".join(allow_patterns))
+    print("  (never code/venv - the remote repo also holds an older firewall.py, and")
+    print("   downloading it would overwrite your local one)")
     if args.model_only:
         print("  (--model-only: only the .gguf - Layer 1's qdrant_storage will NOT be here)")
     elif args.no_datasets:

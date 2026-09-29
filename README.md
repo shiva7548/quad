@@ -478,6 +478,61 @@ Then confirm the vectors are really there (a non-zero count means no rebuild):
 curl -s localhost:6333/collections/prompt_firewall | python -m json.tool | grep points_count
 ```
 
+## Troubleshooting: Layer 2 missing, old-looking UI
+
+**Symptom:** the server starts but prints only `Threshold: 0.78`, the page says
+*"Your prompt is embedded, then compared to known malicious vectors in Qdrant"*,
+`/check` returns no `session_id`/`turns_in_window`/`layer2` fields and there is no
+status banner - even though `doctor.py` reports `READY`.
+
+**Cause:** `firewall.py` in your folder was **overwritten by an older copy** that
+ships inside the Hugging Face asset repo (`linto777/my-qdrant-project` contains
+`firewall.py`, `Dockerfile`, `docker-compose.yml`, `requirements.txt` and
+`scratch*.py` next to the model). The old build has no `from context_rules
+import`, no `Layer2Judge` wiring and no `/health` banner, so Layer 2 can never
+load no matter how correct the model path is. `doctor.py` survived because the
+asset repo has no `doctor.py`.
+
+**Fix (model and vector DB are untouched):**
+
+```bash
+cd quad
+git fetch origin arena/01a0eb9a-quad
+git checkout -f -B arena/01a0eb9a-quad FETCH_HEAD     # or: bash scripts/update_branch.sh --yes
+python scripts/doctor.py                              # "code ... current build"  (ok)
+python firewall.py                                    # now prints the Layer 2 block
+```
+
+`doctor.py` now detects this automatically and prints the fix:
+
+```
+code        firewall.py in this folder is NOT the current build - missing:
+              from context_rules import  (the alias/context layer)
+              Layer2Judge  (Layer 2 wiring in the server)                          FAIL
+            fix: git checkout -f -B arena/01a0eb9a-quad FETCH_HEAD
+```
+
+**Prevented in this version:** `scripts/download_model.py` now fetches **assets
+only** (`*.gguf`, `qdrant_storage/**`, `datasets/**`) and ignores every code
+file, so it can no longer clobber the app. If you downloaded with an older copy
+of the script, run the fix above once.
+
+**What a correct start looks like:**
+
+```
+RAG prompt firewall (HTTP) - context layer build
+==================================================
+Threshold: 0.78 | Layer 2 mode: gray
+Layer 2: connected (/home/pop/quad/Qwen3.5-9B.Q4_K_M.gguf)
+Session window: 6 turns | Auto-harden: True
+Open http://127.0.0.1:8000/ to type a prompt (the status banner at the top shows Layer 1/Layer 2).
+Status as JSON: http://127.0.0.1:8000/health
+```
+
+and the page shows a green **`Layer 2 (LLM judge): connected · Qwen3.5-9B.Q4_K_M.gguf · mode gray`**
+line. If you see `mode off` or an amber "NOT connected" row instead, the GGUF was
+not found - check with `python scripts/doctor.py`.
+
 ## Fresh start (nothing on disk) — the six commands, verified
 
 Run these in order. Each line is checked against the repo, and the "you should
@@ -497,6 +552,7 @@ pip install -r requirements.txt --extra-index-url https://abetlen.github.io/llam
 # 3. model + prebuilt vector DB (~5.9 GB, public repo, no token)
 python scripts/download_model.py --no-datasets
 #    you should see: Qwen3.5-9B.Q4_K_M.gguf  and  qdrant_storage/  in this folder
+#    it never downloads code (an older firewall.py lives in that HF repo)
 #    (drop --no-datasets for the full 6.4 GB if you also want datasets/ for a rebuild)
 
 # 4. vector DB (start it from INSIDE the quad folder so $PWD is right)

@@ -104,6 +104,57 @@ class Report:
                 print("  %d. %s" % (index, fix))
 
 
+def check_code_integrity(report):
+    """Is the code in this folder the CURRENT code (not an older copy)?
+
+    The Hugging Face asset repo also ships a firewall.py, and a naive download
+    used to overwrite the local one - the server then ran an old, Layer-1-only
+    build with no Layer 2 wiring and no status banner. These markers make that
+    impossible to miss.
+    """
+    path = os.path.join(os.getcwd(), "firewall.py")
+    if not os.path.isfile(path):
+        report.bad("code", "firewall.py not found - run this from the quad folder")
+        return
+    with open(path, "r", encoding="utf-8", errors="replace") as handle:
+        source = handle.read()
+
+    required = {
+        "from context_rules import": "the alias/context layer",
+        "health_payload": "the /health status used by the UI banner",
+        "Layer2Judge": "Layer 2 wiring in the server",
+    }
+    missing = [name for name, why in required.items() if name not in source]
+    if missing:
+        report.fatal_row(
+            "code",
+            "firewall.py in this folder is NOT the current build - missing:\n  "
+            + "\n  ".join("  %s  (%s)" % (name, required[name]) for name in missing),
+            "restore it (your model/vector DB are untouched):\n"
+            "     git checkout -f -B arena/01a0eb9a-quad FETCH_HEAD   (after: "
+            "git fetch origin arena/01a0eb9a-quad)\n"
+            "     or:  bash scripts/update_branch.sh --yes\n"
+            "  Then re-run this doctor. Cause: a download from the HF asset repo "
+            "overwrote the file (fixed in scripts/download_model.py).")
+        return
+
+    # Also surface any other modified tracked file.
+    git_dir = os.path.join(os.getcwd(), ".git")
+    if os.path.isdir(git_dir):
+        import subprocess
+        try:
+            out = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True,
+                                 timeout=10).stdout.strip()
+        except Exception:
+            out = ""
+        if out:
+            report.warn("code", "local modifications to tracked files:\n  " +
+                        "\n  ".join(out.splitlines()[:8]),
+                        "review them, or restore with: git checkout -- <file>")
+            return
+    report.ok("code", "current build (context layer + Layer 2 wiring + status endpoint)")
+
+
 def check_python(report):
     version = "%d.%d.%d" % sys.version_info[:3]
     if sys.version_info < (3, 9):
@@ -376,6 +427,7 @@ def main():
 
     report = Report()
     check_python(report)
+    check_code_integrity(report)
     check_packages(report)
     model_path = check_model(report, args.model)
     check_embedder_cache(report)
