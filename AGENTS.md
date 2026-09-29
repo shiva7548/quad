@@ -46,6 +46,7 @@ python scripts/download_model.py        # GGUF + qdrant_storage (skips venv/)
    python -m unittest discover -s tests -t .     # 53 tests, no model/Qdrant/network
    python scripts/demo_context_pairs.py          # detector expectations must pass
    python scripts/gguf_smoke_test.py --pre-scan-only   # same engine, report form
+   python scripts/doctor.py                            # preflight report
    ```
    `scripts/gguf_smoke_test.py --model <gguf>` is the only script that exercises the
    real GGUF judge; run it by hand when a model is available.
@@ -69,6 +70,7 @@ firewall.py                    # Layer 1 + pre-scan + Layer 2 + hardening, HTTP 
 context_rules.py               # alias/symbol detection, resolution, XML fencing, sessions
 layer2_judge.py                # Layer 2 judge: prompt, message builder, reply parser
 tests/test_context_rules.py    # alias/resolve/fence logic tests (no model, no network)
+scripts/doctor.py              # preflight check: model path lookup, deps, Qdrant, port
 scripts/gguf_smoke_test.py     # smoke-test / eval the GGUF judge on prompts or a dataset
 scripts/demo_context_pairs.py  # allow/block demo pairs, --full runs the real stack
 tests/test_firewall_flow.py    # request flow with stubbed deps (no model, no Qdrant)

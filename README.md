@@ -147,10 +147,87 @@ and are fetched on demand by `scripts/download_model.py`. That repo is public
 and **not gated**, so no token is needed to download it (`HF_TOKEN` is only for
 the gated *source* datasets if you rebuild the index from scratch).
 
+## How the model connects to the code
+
+There is **no registration step and no code change**. The GGUF judge is a file
+on disk, and `layer2_judge.py` looks for it in this order:
+
+| # | Where | Notes |
+|---|---|---|
+| 1 | `$LAYER2_MODEL_PATH` | any absolute path, e.g. `/data/models/qwen.gguf` |
+| 2 | `./Qwen3.5-9B.Q4_K_M.gguf` | next to `firewall.py` (relative to the **current directory**) |
+| 3 | `./models/Qwen3.5-9B.Q4_K_M.gguf` | the folder `scripts/download_model.py` fills |
+
+The first existing file wins. So to connect a model you do exactly one of these:
+
+```bash
+# (a) let the script place it — nothing else to do
+python scripts/download_model.py        # writes ./Qwen3.5-9B.Q4_K_M.gguf
+
+# (b) move/copy the .gguf into the project folder yourself
+cp ~/Downloads/some-model.Q4_K_M.gguf ./Qwen3.5-9B.Q4_K_M.gguf
+
+# (c) keep it anywhere else (external drive, /data, HF cache) and point at it
+export LAYER2_MODEL_PATH=/absolute/path/to/model.gguf
+
+# (d) rename it anything you like, as long as you point at it
+export LAYER2_MODEL_PATH=./my-judge-4b.gguf
+```
+
+Verify before starting — this prints the lookup above with the file sizes:
+
+```bash
+python scripts/doctor.py
+python scripts/doctor.py --load        # also loads the model and judges one prompt
+```
+
+Two gotchas worth knowing:
+
+* **Relative paths are relative to where you run the command.** `python firewall.py`
+  from the repo root finds `./Qwen3.5-9B.Q4_K_M.gguf`; run it from `~/` and it
+  will not (use an absolute `LAYER2_MODEL_PATH` if you want to launch from
+  anywhere). `doctor.py` prints the current directory it resolved from.
+* With **Docker**, the repo folder is mounted at `/app`, so the model must be
+  inside the mounted folder (or in a second volume) — see the docker-compose
+  entry `LAYER2_MODEL_PATH=/app/Qwen3.5-9B.Q4_K_M.gguf`.
+
+### The model file is never modified
+
+Nothing in this repo trains, fine-tunes or rewrites the GGUF. It is a read-only
+5.8 GB artefact that the process opens in `Layer2Judge.__init__` and then only
+*queries*. What changes at runtime is:
+
+| Thing | Changed by | Where it lives |
+|---|---|---|
+| The judge's instructions and rules (R1/R2/R3) | editing `JUDGE_SYSTEM_PROMPT` | `layer2_judge.py` |
+| What the judge is told about your prompt | fencing + the alias pre-scan | per request, in memory |
+| Sampling (temperature 0, seed 42) | `LAYER2_SEED` / code | per request |
+| New attack vectors learned by auto-hardening | the firewall at runtime | in Qdrant (the vector DB), **not** in the model |
+
+So "moving the model" and "changing the model" are different things: you move
+the file, you configure its path, and the only thing that ever grows on its own
+is the vector collection.
+
+### Moving the model to another machine or a server
+
+```bash
+# copy the model + the prebuilt vector DB to the target machine
+scp Qwen3.5-9B.Q4_K_M.gguf  user@server:/opt/quad/
+scp -r qdrant_storage       user@server:/opt/quad/
+# on the server
+cd /opt/quad && export LAYER2_MODEL_PATH=/opt/quad/Qwen3.5-9B.Q4_K_M.gguf
+export QDRANT_URL=http://localhost:6333
+python firewall.py
+```
+
+The GGUF is a single self-contained file — no sidecar config, tokenizer or
+adapter files, so a plain `cp`/`scp`/USB copy is enough. Re-running
+`scripts/download_model.py` on the target does the same thing from the Hub.
+
 ## Quick start (local, CPU)
 
 ```bash
-# 1. Get the code
+# 1. Get the code (git clone is what puts the code on your machine)
 git clone https://github.com/shiva7548/quad.git
 cd quad
 
@@ -167,12 +244,20 @@ python scripts/download_model.py
 docker run -d --name qdrant -p 6333:6333 -v ./qdrant_storage:/qdrant/storage qdrant/qdrant:latest
 #   (or reuse the downloaded qdrant_storage so the 14k vectors are already there)
 
-# 5. Run the firewall
+# 5. Check everything is wired up (prints where it looks for the model)
+python scripts/doctor.py
+
+# 6. Run the firewall
 export QDRANT_URL=http://localhost:6333
 export LAYER2_MODE=gray       # only borderline prompts pay the LLM cost
 python firewall.py            # server + Web UI on http://localhost:8000/
 python firewall.py --cli      # interactive CLI instead
 ```
+
+Step 1 gives you the code, step 2 the libraries, step 3 the model file, step 4
+the vector database — and step 5 tells you which of them is missing, if any.
+There is no separate "connect" step: the code finds the model by path (see
+[How the model connects to the code](#how-the-model-connects-to-the-code)).
 
 CPU reality check: a 9B Q4 judge on 2–4 threads takes **~10–25 s per judged
 prompt**, which is why the default `gray` mode only judges borderline prompts
